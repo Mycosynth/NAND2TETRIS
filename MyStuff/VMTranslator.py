@@ -14,7 +14,6 @@ label_dict = {}
 cur_file_name = ''
 
 def main(file_or_dir):
-  #os.chdir('/Users/nate/Desktop/nand2tetris/projects/07')
   if os.path.isdir(file_or_dir):
     codeWriter_1 = codeWriter(file_or_dir)
     for root, dirs, files in os.walk(file_or_dir):
@@ -32,14 +31,32 @@ def main(file_or_dir):
     print('error input is neither file or dir, in main line 9')
 
 def process_1_parser(the_parser,the_writer):
+  in_function = []
   while the_parser.hasMoreCommands():
+    cur_function = None
+    if len(in_function) > 0:
+      cur_function = in_function[-1]
     the_parser.advance()
     op = the_parser.commandType()
     if op == C_ARITHMETIC:
       the_writer.writeArithmetic(the_parser.arg1())
     elif (op == C_PUSH) or (op == C_POP):
       the_writer.writePushPop(op,the_parser.arg1(),the_parser.arg2())
-    
+    elif op == C_GOTO:
+      the_writer.writeGoto(the_parser.arg1(),cur_function)
+    elif op == C_IF:
+      the_writer.writeIf(the_parser.arg1(),cur_function)
+    elif op == C_LABEL:
+      the_writer.writeLabel(the_parser.arg1(),cur_function)
+    elif op == C_FUNCTION:
+      in_function.append(the_parser.arg1())
+      the_writer.writeFunction(op,the_parser.arg1(),the_parser.arg2())
+    elif op == C_CALL:
+      pass
+    elif op == C_RETURN:
+      in_function = in_function[:-1]
+      pass
+
 def file_to_arr(file_name):
   f = open(file_name)
   cur_file_name = file_name
@@ -104,7 +121,11 @@ class codeWriter():
   def writeToFile(self):
     self.file.write(self.cur_asm)
     self.file.close()
-    
+  
+  def writeFunction(self,function_name,num_args):
+    pass
+  def writeCall(self,function_name,args_pushed):
+    pass
   def writeArithmetic(self,command_string):
     if command_string in ['add','sub','and','or']:
       self.cur_asm += self.x_op_y(command_string)
@@ -112,15 +133,33 @@ class codeWriter():
       self.cur_asm += self.op_x(command_string)
     elif command_string in ['eq','lt','gt']:
       self.cur_asm += self.x_bool_y(command_string)
+
+  def writeGoto(self,label,function_name):
+    self.cur_asm += self.goto_label(label,False,function_name) 
   
-  def goto_label(self,label,if_goto):
+  def writeIf(self,label,function_name):
+    self.cur_asm += self.goto_label(label,True,function_name)
+
+  def writeLabel(self,label,function_name):
+    cur_label = label
+    if not function_name is None:
+      cur_label = function_name + '$' + cur_label
+    if not cur_label in label_dict:
+      label_dict[cur_label] = self.uniqify_label(cur_label)
+    cur_label = label_dict[cur_label]
+    self.cur_asm += '(' + cur_label + ')\n'
+
+  def goto_label(self,label,if_goto,function_name):
     jump_type = 'JMP'
     if if_goto:
       jump_type = 'JNE'
-    if not label in label_dict:
-      label_dict[label] = self.uniqify_label(label)
-    cur_label = label_dict[label]
-    return self.d_equal_sp_minus_1_reg+'@'+cur_label+'\nD;'+jump_type
+    wrk_label = label
+    if not function_name is None:
+      wrk_label = function_name + '$' + label
+    if not wrk_label in label_dict:
+      label_dict[wrk_label] = self.uniqify_label(wrk_label)
+    cur_label = label_dict[wrk_label]
+    return self.d_equal_sp_minus_1_reg()+'@'+cur_label+'\nD;'+jump_type+'\n'
   
   def writePushPop(self,op,seg_name,index):
     asm_to_write = ''
