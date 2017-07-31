@@ -12,15 +12,18 @@ C_RETURN = 8
 C_CALL = 9
 label_dict = {}
 cur_file_name = ''
+file_counter = 0
 
 def main(file_or_dir):
+  global file_counter
   if os.path.isdir(file_or_dir):
     codeWriter_1 = codeWriter(file_or_dir)
     for root, dirs, files in os.walk(file_or_dir):
       for file in files:
         if file.endswith('.vm'):
-          the_parser = parser(file_to_arr(file))
+          the_parser = parser(file_to_arr(root + '/' + file))
           process_1_parser(the_parser,codeWriter_1)
+          file_counter += 1
     codeWriter_1.writeToFile()
   elif os.path.isfile(file_or_dir):
     parser_1 = parser(file_to_arr(file_or_dir))
@@ -50,12 +53,12 @@ def process_1_parser(the_parser,the_writer):
       the_writer.writeLabel(the_parser.arg1(),cur_function)
     elif op == C_FUNCTION:
       in_function.append(the_parser.arg1())
-      the_writer.writeFunction(op,the_parser.arg1(),the_parser.arg2())
+      the_writer.writeFunction(the_parser.arg1(),int(the_parser.arg2()))
     elif op == C_CALL:
-      pass
+      the_writer.writeCall(the_parser.arg1(),int(the_parser.arg2()))
     elif op == C_RETURN:
       in_function = in_function[:-1]
-      pass
+      the_writer.writeReturn()
 
 def file_to_arr(file_name):
   f = open(file_name)
@@ -77,6 +80,9 @@ class parser():
   def advance(self):
     self.current_line = self.vm_arr[self.next_line_index]
     self.next_line_index += 1
+    while (self.current_line == '') or (self.current_line == '\n'):
+        self.current_line = self.vm_arr[self.next_line_index]
+        self.next_line_index += 1
   
   def commandType(self):
     working_line = self.current_line
@@ -97,7 +103,7 @@ class parser():
                          'if-goto':C_IF,
                          'function':C_FUNCTION,
                          'call':C_CALL}
-    return command_type_dict[working_line.partition(' ')[0]]  
+    return command_type_dict[working_line.split()[0]]  
   
   def arg1(self):
     working_line = self.current_line
@@ -117,15 +123,65 @@ class codeWriter():
     self.file = open(self.fileName,'w+')
     self.unique_id = 0
     self.cur_asm = ''
+    self.writeInit()
+  
+  def writeReturn(self):
+    #FRAME = LCL , @R14 will contain FRAME
+    self.cur_asm += '@LCL\nD=M\n@R14\nM=D\n'
+    #RET = *(FRAME-5) , @R15 will contain RET
+    self.cur_asm += '@R14\nD=M\n@5\nA=D-A\nD=M\n@R15\nM=D\n'
+    #*ARG = pop()
+    self.cur_asm += '@SP\nA=M-1\nD=M\n@ARG\nA=M\nM=D\n'
+    #SP = ARG+1
+    self.cur_asm += '@ARG\nD=M+1\n@SP\nM=D\n'
+    #THAT = *(FRAME-1)
+    self.cur_asm += '@R14\nD=M\n@1\nA=D-A\nD=M\n@THAT\nM=D\n'
+    #THIS = *(FRAME-2)
+    self.cur_asm += '@R14\nD=M\n@2\nA=D-A\nD=M\n@THIS\nM=D\n'
+    #ARG = *(FRAME-3)
+    self.cur_asm += '@R14\nD=M\n@3\nA=D-A\nD=M\n@ARG\nM=D\n'
+    #LCL = *(FRAME-4)
+    self.cur_asm += '@R14\nD=M\n@4\nA=D-A\nD=M\n@LCL\nM=D\n'
+    #goto RET
+    self.cur_asm += '@R15\nA=M\n0;JMP\n'
     
   def writeToFile(self):
     self.file.write(self.cur_asm)
     self.file.close()
-  
+    
   def writeFunction(self,function_name,num_args):
-    pass
-  def writeCall(self,function_name,args_pushed):
-    pass
+    self.cur_asm += '('+function_name+')\n'
+    while num_args>0:
+      self.writePushPop(C_PUSH,'constant',0)
+      num_args -= 1
+  
+  #call f n, f=function_name, n=args_pushed
+  def writeCall(self,function_name,args_pushed): 
+    self.return_label = self.uniqify_label('return_address')
+    #push return address
+    self.cur_asm += '@'+self.return_label+'\nD=A\n@SP\nM=D\n'+self.inc_sp_reg()
+    #push LCL
+    self.writePushPop(C_PUSH,'local',0)
+    #push ARG
+    self.writePushPop(C_PUSH,'argument',0)
+    #push THIS
+    self.writePushPop(C_PUSH,'this',0)
+    #push THAT
+    self.writePushPop(C_PUSH,'that',0)
+    #ARG = SP-n-5
+    self.cur_asm += '@5\nD=A\n@'+str(args_pushed)+'\nD=D+A\n@SP\nD=M-D\n@ARG\nM=D\n'
+    #LCL = SP
+    self.cur_asm += '@SP\nD=M\n@LCL\nM=D\n'
+    #goto f
+    self.cur_asm += '@'+function_name+'\n0;JMP\n'
+    #(return-address)
+    self.cur_asm += '('+self.return_label+')\n'
+
+  def writeInit(self):
+    self.cur_asm += '@255\nD=A\n@SP\nM=D\n'
+    #only jump if Sys.vm exists! :)
+    self.writeCall('Sys.init',0)
+  
   def writeArithmetic(self,command_string):
     if command_string in ['add','sub','and','or']:
       self.cur_asm += self.x_op_y(command_string)
@@ -169,9 +225,10 @@ class codeWriter():
       else:
 	asm_to_write = self.at_memory_segment(seg_name,index)+'D=M\n@SP\nA=M\nM=D\n'+self.inc_sp_reg()
     elif op == C_POP:
-	asm_to_write = self.at_memory_segment(seg_name,index)+'D=A\n@R13\nM=D\n@SP\nA=M-1\nD=M\n@R13\nA=M\nM=D\n'+self.dec_sp_reg()
-    else:
-      print('Error not push/pop')
+      if seg_name == 'static':
+        asm_to_write = '@SP\nA=M-1\nD=M\n'+self.dec_sp_reg()+self.at_memory_segment(seg_name,index)+'M=D\n'
+      else:
+        asm_to_write = self.at_memory_segment(seg_name,index)+'D=A\n@R13\nM=D\n@SP\nA=M-1\nD=M\n@R13\nA=M\nM=D\n'+self.dec_sp_reg()
     self.cur_asm += asm_to_write
     
   def at_memory_segment(self,seg_name,index):
@@ -182,7 +239,7 @@ class codeWriter():
       cur_offset = {'pointer':'3','temp':'5'}[seg_name]
       return '@'+cur_offset+'\nD=A\n@'+str(index)+'\nA=A+D\n'
     elif seg_name == 'static':
-      return '@'+self.fileName+'.'+str(index)+'\n'
+      return '@x'+str(file_counter)+'x'+str(index)+'\n' #book says to use the filename, that fails their tests due to excessive length,xfilecounterxstaticcounter works
  
   
   def x_op_y(self,op):
@@ -214,4 +271,6 @@ class codeWriter():
     return label + str(a)
 
 if __name__ == "__main__":
+   # print(sys.argv[1])
+   # print(os.path.isdir(sys.argv[1]))
     main(sys.argv[1])
